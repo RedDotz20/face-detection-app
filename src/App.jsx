@@ -1,88 +1,169 @@
-import { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import * as faceapi from 'face-api.js';
-import './App.css';
 
 export default function App() {
+  const [isVideoOn, setIsVideoOn] = useState(false);
+  const [isVideoInitialized, setIsVideoInitialized] = useState(false);
+  const [areModelsLoaded, setAreModelsLoaded] = useState(false);
+
   const videoRef = useRef();
   const canvasRef = useRef();
+  const detectionIntervalRef = useRef(null);
 
-  // LOAD FROM USEEFFECT
   useEffect(() => {
-    startVideo();
-    videoRef && loadModels();
+    if (isVideoOn) {
+      initializeVideo();
+    } else {
+      stopVideo();
+    }
+
+    // Cleanup on unmount
+    return () => {
+      clearInterval(detectionIntervalRef.current);
+      stopVideo();
+    };
+  }, [isVideoOn, isVideoInitialized]);
+
+  useEffect(() => {
+    loadModels()
+      .then(() => {
+        setAreModelsLoaded(true);
+        if (isVideoOn) {
+          startVideo();
+        }
+      })
+      .catch((error) => {
+        console.error('Error loading models:', error);
+      });
   }, []);
 
-  // OPEN YOU FACE WEBCAM
-  const startVideo = () => {
-    navigator.mediaDevices
-      .getUserMedia({ video: true })
-      .then((currentStream) => {
-        videoRef.current.srcObject = currentStream;
-      })
-      .catch((err) => {
-        console.log(err);
-      });
+  const initializeVideo = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      videoRef.current.srcObject = stream;
+
+      videoRef.current.onloadedmetadata = () => {
+        setIsVideoInitialized(true);
+        if (areModelsLoaded) {
+          startVideo();
+        }
+      };
+    } catch (error) {
+      console.error('Error initializing video:', error);
+      setIsVideoOn(false);
+    }
   };
 
-  // LOAD MODELS FROM FACE API
-  const loadModels = () => {
-    Promise.all([
-      // THIS FOR FACE DETECT AND LOAD FROM YOU PUBLIC/MODELS DIRECTORY
-      faceapi.nets.tinyFaceDetector.loadFromUri('/models'),
-      faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
-      faceapi.nets.faceRecognitionNet.loadFromUri('/models'),
-      faceapi.nets.faceExpressionNet.loadFromUri('/models'),
-    ]).then(() => {
-      faceMyDetect();
+  const startVideo = () => {
+    if (!isVideoInitialized) {
+      // Wait for video to initialize before starting it
+      setTimeout(startVideo, 100);
+      return;
+    }
+
+    videoRef.current.play().then(() => {
+      startFaceDetection();
     });
   };
 
-  const faceMyDetect = () => {
-    setInterval(async () => {
-      const detections = await faceapi
-        .detectAllFaces(videoRef.current, new faceapi.TinyFaceDetectorOptions())
-        .withFaceLandmarks()
-        .withFaceExpressions();
+  const stopVideo = () => {
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
+  };
 
-      // DRAW YOU FACE IN WEBCAM
-      canvasRef.current.innerHtml = faceapi.createCanvasFromMedia(
-        videoRef.current
-      );
-      faceapi.matchDimensions(canvasRef.current, {
-        width: 940,
-        height: 650,
-      });
+  const loadModels = async () => {
+    try {
+      await Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri('/models'),
+        faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
+        faceapi.nets.faceRecognitionNet.loadFromUri('/models'),
+        faceapi.nets.faceExpressionNet.loadFromUri('/models'),
+      ]);
+    } catch (error) {
+      console.error('Error loading models:', error);
+      throw error;
+    }
+  };
 
-      const resized = faceapi.resizeResults(detections, {
-        width: 940,
-        height: 650,
-      });
+  const toggleVideo = () => {
+    setIsVideoOn((prevIsVideoOn) => !prevIsVideoOn);
+  };
 
-      faceapi.draw.drawDetections(canvasRef.current, resized);
-      faceapi.draw.drawFaceLandmarks(canvasRef.current, resized);
-      faceapi.draw.drawFaceExpressions(canvasRef.current, resized);
+  const startFaceDetection = () => {
+    detectionIntervalRef.current = setInterval(async () => {
+      try {
+        if (!isVideoInitialized) {
+          return; //! Avoid processing frames if video is not initialized
+        }
+
+        const detections = await faceapi
+          .detectAllFaces(
+            videoRef.current,
+            new faceapi.TinyFaceDetectorOptions()
+          )
+          .withFaceLandmarks()
+          .withFaceExpressions();
+
+        const canvas = canvasRef.current;
+        faceapi.matchDimensions(canvas, {
+          width: 940,
+          height: 650,
+        });
+
+        const resizedDetections = faceapi.resizeResults(detections, {
+          width: 940,
+          height: 650,
+        });
+
+        faceapi.draw.drawDetections(canvas, resizedDetections);
+        faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
+        faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
+      } catch (error) {
+        console.error('Error detecting faces:', error);
+      }
     }, 1000);
   };
 
   return (
-    <div className="myapp">
-      <h1>FACE DETECTION</h1>
-      <div className="appvide">
-        <video
-          crossOrigin="anonymous"
-          ref={videoRef}
-          height={650}
-          width={940}
-          autoPlay
-        ></video>
+    <div className="flex flex-col items-center w-screen h-screen justify-center">
+      <h1 className="text-4xl font-semibold mb-4">FACE DETECTION</h1>
+      <div className="relative flex items-center justify-center">
+        {areModelsLoaded ? (
+          isVideoOn ? (
+            <video
+              crossOrigin="anonymous"
+              ref={videoRef}
+              height={450}
+              width={700}
+              autoPlay
+              playsInline
+            ></video>
+          ) : (
+            <div className="bg-gray-300 text-gray-600 p-4 rounded-md">
+              Video is turned off
+            </div>
+          )
+        ) : (
+          <div className="bg-gray-300 text-gray-600 p-4 rounded-md">
+            Loading models...
+          </div>
+        )}
         <canvas
           ref={canvasRef}
-          height={650}
-          width={940}
-          className="appcanvas"
+          height={450}
+          width={700}
+          className="absolute top-0 right-0 h-full w-full border border-white"
         />
-        <div className="vidBackground"></div>
+        <div className="absolute -z-[1] w-full h-full bg-black"></div>
       </div>
+      <button
+        onClick={toggleVideo}
+        className="absolute bottom-4 right-4 bg-blue-500 text-white px-4 py-2 rounded-md"
+      >
+        {isVideoOn ? 'Turn Off Video' : 'Turn On Video'}
+      </button>
     </div>
   );
 }
