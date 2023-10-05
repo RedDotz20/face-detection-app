@@ -17,7 +17,7 @@ export default function App() {
       stopVideo();
     }
 
-    // Cleanup on unmount
+    //? Cleanup on Unmount
     return () => {
       clearInterval(detectionIntervalRef.current);
       stopVideo();
@@ -56,7 +56,7 @@ export default function App() {
 
   const startVideo = () => {
     if (!isVideoInitialized) {
-      // Wait for video to initialize before starting it
+      //? Wait for Video to Initialize before Starting
       setTimeout(startVideo, 100);
       return;
     }
@@ -128,21 +128,30 @@ export default function App() {
 
   return (
     <div className="flex flex-col items-center w-screen h-screen justify-center">
-      <h1 className="text-4xl font-semibold mb-4">FACE DETECTION</h1>
-      <div className="relative flex items-center justify-center">
+      <h1 className="text-5xl font-semibold mb-4">FACE DETECTION</h1>
+      <div className="relative flex items-center justify-center min-h-[400px] mb-4">
         {areModelsLoaded ? (
           isVideoOn ? (
-            <video
-              crossOrigin="anonymous"
-              ref={videoRef}
-              height={450}
-              width={700}
-              autoPlay
-              playsInline
-            ></video>
+            <>
+              <video
+                crossOrigin="anonymous"
+                ref={videoRef}
+                height={450}
+                width={700}
+                autoPlay
+                playsInline
+              ></video>
+              <canvas
+                ref={canvasRef}
+                height={450}
+                width={700}
+                className="absolute top-0 right-0 h-full w-full border border-white"
+              />
+              <div className="absolute -z-[1] w-full h-full bg-black"></div>
+            </>
           ) : (
-            <div className="bg-gray-300 text-gray-600 p-4 rounded-md">
-              Video is turned off
+            <div className="bg-gray-600 p-4 rounded-md h-[450px] w-[700px] text-white flex items-center justify-center">
+              <h2>Video is turned off</h2>
             </div>
           )
         ) : (
@@ -150,19 +159,51 @@ export default function App() {
             Loading models...
           </div>
         )}
-        <canvas
-          ref={canvasRef}
-          height={450}
-          width={700}
-          className="absolute top-0 right-0 h-full w-full border border-white"
-        />
-        <div className="absolute -z-[1] w-full h-full bg-black"></div>
       </div>
       <button
         onClick={toggleVideo}
-        className="absolute bottom-4 right-4 bg-blue-500 text-white px-4 py-2 rounded-md"
+        className={` text-white font-bold py-2 px-4 rounded w-[10rem] ${
+          !isVideoOn
+            ? 'bg-red-600 hover:bg-red-700'
+            : 'bg-green-600 hover:bg-green-700'
+        }`}
       >
-        {isVideoOn ? 'Turn Off Video' : 'Turn On Video'}
+        {isVideoOn ? (
+          <span className="flex gap-2 justify-center items-center">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
+              className="w-6 h-6"
+            >
+              <path
+                strokeLinecap="round"
+                d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z"
+              />
+            </svg>
+            Video ON
+          </span>
+        ) : (
+          <span className="flex gap-2 justify-center items-center">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              strokeWidth={1.5}
+              stroke="currentColor"
+              className="w-6 h-6"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M12 18.75H4.5a2.25 2.25 0 01-2.25-2.25V9m12.841 9.091L16.5 19.5m-1.409-1.409c.407-.407.659-.97.659-1.591v-9a2.25 2.25 0 00-2.25-2.25h-9c-.621 0-1.184.252-1.591.659m12.182 12.182L2.909 5.909M1.5 4.5l1.409 1.409"
+              />
+            </svg>
+            Video OFF
+          </span>
+        )}
       </button>
     </div>
   );
