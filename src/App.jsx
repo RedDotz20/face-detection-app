@@ -1,8 +1,8 @@
 import { useRef, useEffect } from 'react';
-import './App.css';
 import * as faceapi from 'face-api.js';
+import './App.css';
 
-function App() {
+export default function App() {
   const videoRef = useRef();
   const canvasRef = useRef();
 
@@ -86,5 +86,3 @@ function App() {
     </div>
   );
 }
-
-export default App;
