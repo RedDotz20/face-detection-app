@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import * as faceapi from 'face-api.js';
+import { labels } from './data/labels';
 
 export default function App() {
   const [isVideoOn, setIsVideoOn] = useState(false);
@@ -11,14 +12,10 @@ export default function App() {
   const detectionIntervalRef = useRef(null);
 
   useEffect(() => {
-    if (isVideoOn) {
-      initializeVideo();
-    } else {
-      stopVideo();
-    }
+    isVideoOn ? initializeVideo() : stopVideo();
 
-    //? Cleanup on Unmount
     return () => {
+      //? Cleanup on Unmount
       clearInterval(detectionIntervalRef.current);
       stopVideo();
     };
@@ -89,9 +86,10 @@ export default function App() {
 
   const toggleVideo = () => setIsVideoOn((prevIsVideoOn) => !prevIsVideoOn);
 
-  function getLabeledFaceDescriptions() {
-    const labels = ['Carlos'];
-    return Promise.all(
+  const getLabeledFaceDescriptions = async () => {
+    const labeledFaceDescriptors = [];
+
+    await Promise.all(
       labels.map(async (label) => {
         const descriptors = [];
 
@@ -107,19 +105,23 @@ export default function App() {
         }
 
         if (descriptors.length > 0) {
-          //? Flatten the descriptors into a single array
-          const flattenedDescriptors = [].concat(...descriptors);
+          const flattenedDescriptors = descriptors.flat();
 
-          return new faceapi.LabeledFaceDescriptors(
-            label,
-            flattenedDescriptors
+          labeledFaceDescriptors.push(
+            new faceapi.LabeledFaceDescriptors(label, flattenedDescriptors)
           );
         }
       })
     );
-  }
+
+    return labeledFaceDescriptors;
+  };
 
   const startFaceDetection = async () => {
+    if (!isVideoInitialized) {
+      return; //! Avoid processing frames if video is not initialized
+    }
+
     const labeledFaceDescriptors = await getLabeledFaceDescriptions();
     console.log(labeledFaceDescriptors);
 
@@ -132,10 +134,6 @@ export default function App() {
 
     detectionIntervalRef.current = setInterval(async () => {
       try {
-        if (!isVideoInitialized) {
-          return; //! Avoid processing frames if video is not initialized
-        }
-
         const canvas = canvasRef.current;
         const displaySize = { width: 940, height: 650 };
         faceapi.matchDimensions(canvas, displaySize);
@@ -171,8 +169,10 @@ export default function App() {
 
   return (
     <div className="flex flex-col items-center w-screen h-screen justify-center">
-      <h1 className="text-5xl font-semibold mb-4">FACE DETECTION</h1>
-      <div className="relative flex items-center justify-center min-h-[400px] mb-4">
+      <h1 className="text-5xl font-semibold mb-4 tracking-widest">
+        FACE DETECTION
+      </h1>
+      <div className="relative flex items-center justify-center min-h-[400px] mb-4 shadow-xl">
         {areModelsLoaded ? (
           isVideoOn ? (
             <>
@@ -195,18 +195,18 @@ export default function App() {
             </>
           ) : (
             <div className="bg-gray-600 p-4 rounded-md h-[450px] w-[700px] text-white flex items-center justify-center">
-              <h2>Video is turned off</h2>
+              <h2>VIDEO IS TURNED OFF</h2>
             </div>
           )
         ) : (
           <div className="bg-gray-300 text-gray-600 p-4 rounded-md">
-            Loading models...
+            LOADING MODELS...
           </div>
         )}
       </div>
       <button
         onClick={toggleVideo}
-        className={` text-white font-bold py-2 px-4 rounded w-[10rem] ${
+        className={` text-white font-bold py-2 px-4 rounded w-[10rem] shadow-2xl ${
           !isVideoOn
             ? 'bg-red-600 hover:bg-red-700'
             : 'bg-green-600 hover:bg-green-700'
