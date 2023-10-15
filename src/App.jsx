@@ -25,16 +25,29 @@ export default function App() {
   }, [isVideoOn, isVideoInitialized]);
 
   useEffect(() => {
-    loadModels()
-      .then(() => {
-        setAreModelsLoaded(true);
-        if (isVideoOn) {
-          startVideo();
-        }
-      })
-      .catch((error) => {
+    const loadModels = async () => {
+      try {
+        await Promise.all([
+          faceapi.nets.ssdMobilenetv1.loadFromUri('/models'),
+          faceapi.nets.faceRecognitionNet.loadFromUri('/models'),
+          faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
+        ])
+          .then(() => {
+            setAreModelsLoaded(true);
+            if (isVideoOn) {
+              startVideo();
+            }
+          })
+          .catch((error) => {
+            console.error('Error loading models:', error);
+          });
+      } catch (error) {
         console.error('Error loading models:', error);
-      });
+        throw error;
+      }
+    };
+
+    loadModels();
   }, []);
 
   const initializeVideo = async () => {
@@ -44,6 +57,7 @@ export default function App() {
 
       videoRef.current.onloadedmetadata = () => {
         setIsVideoInitialized(true);
+
         if (areModelsLoaded) {
           startVideo();
         }
@@ -73,53 +87,82 @@ export default function App() {
     }
   };
 
-  const loadModels = async () => {
-    try {
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri('/models'),
-        faceapi.nets.faceLandmark68Net.loadFromUri('/models'),
-        faceapi.nets.faceRecognitionNet.loadFromUri('/models'),
-        faceapi.nets.faceExpressionNet.loadFromUri('/models'),
-      ]);
-    } catch (error) {
-      console.error('Error loading models:', error);
-      throw error;
+  const toggleVideo = () => setIsVideoOn((prevIsVideoOn) => !prevIsVideoOn);
+
+  function getLabeledFaceDescriptions() {
+    const labels = ['Carlos'];
+    return Promise.all(
+      labels.map(async (label) => {
+        const descriptors = [];
+
+        for (let i = 0; i < labels.length; i++) {
+          const image = await faceapi.fetchImage(`/images/${label}/${i}.jpg`);
+
+          const detections = await faceapi
+            .detectSingleFace(image)
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          descriptors.push(detections.descriptor);
+        }
+
+        if (descriptors.length > 0) {
+          //? Flatten the descriptors into a single array
+          const flattenedDescriptors = [].concat(...descriptors);
+
+          return new faceapi.LabeledFaceDescriptors(
+            label,
+            flattenedDescriptors
+          );
+        }
+      })
+    );
+  }
+
+  const startFaceDetection = async () => {
+    const labeledFaceDescriptors = await getLabeledFaceDescriptions();
+    console.log(labeledFaceDescriptors);
+
+    if (!labeledFaceDescriptors || labeledFaceDescriptors.length === 0) {
+      console.error('Labeled face descriptors are missing or empty.');
+      return;
     }
-  };
 
-  const toggleVideo = () => {
-    setIsVideoOn((prevIsVideoOn) => !prevIsVideoOn);
-  };
+    const faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors);
 
-  const startFaceDetection = () => {
     detectionIntervalRef.current = setInterval(async () => {
       try {
         if (!isVideoInitialized) {
           return; //! Avoid processing frames if video is not initialized
         }
 
-        const detections = await faceapi
-          .detectAllFaces(
-            videoRef.current,
-            new faceapi.TinyFaceDetectorOptions()
-          )
-          .withFaceLandmarks()
-          .withFaceExpressions();
-
         const canvas = canvasRef.current;
-        faceapi.matchDimensions(canvas, {
-          width: 940,
-          height: 650,
-        });
+        const displaySize = { width: 940, height: 650 };
+        faceapi.matchDimensions(canvas, displaySize);
 
-        const resizedDetections = faceapi.resizeResults(detections, {
-          width: 940,
-          height: 650,
-        });
+        const detections = await faceapi
+          .detectAllFaces(videoRef.current)
+          .withFaceLandmarks()
+          .withFaceDescriptors();
+
+        const resizedDetections = faceapi.resizeResults(
+          detections,
+          displaySize
+        );
 
         faceapi.draw.drawDetections(canvas, resizedDetections);
-        faceapi.draw.drawFaceLandmarks(canvas, resizedDetections);
-        faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
+
+        const results = resizedDetections.map((d) => {
+          return faceMatcher.findBestMatch(d.descriptor);
+        });
+
+        results.forEach((result, i) => {
+          const box = resizedDetections[i].detection.box;
+          const drawBox = new faceapi.draw.DrawBox(box, {
+            label: result,
+          });
+          drawBox.draw(canvas);
+        });
       } catch (error) {
         console.error('Error detecting faces:', error);
       }
@@ -140,6 +183,7 @@ export default function App() {
                 width={700}
                 autoPlay
                 playsInline
+                muted
               ></video>
               <canvas
                 ref={canvasRef}
