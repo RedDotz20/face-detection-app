@@ -1,171 +1,239 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useCallback } from "react";
 import * as faceapi from "face-api.js";
 import { labels } from "./data/labels";
+import PropTypes from "prop-types";
+
+const DETECTION_INTERVAL = 1000;
+const VIDEO_DIMENSIONS = { width: 940, height: 650 };
+const MODELS_PATH = "/models";
 
 export default function App() {
 	const [isVideoOn, setIsVideoOn] = useState(false);
 	const [isVideoInitialized, setIsVideoInitialized] = useState(false);
 	const [areModelsLoaded, setAreModelsLoaded] = useState(false);
+	const [error, setError] = useState(null);
+	const [isLoading, setIsLoading] = useState(true);
 
 	const videoRef = useRef();
 	const canvasRef = useRef();
 	const detectionIntervalRef = useRef(null);
 
 	useEffect(() => {
-		isVideoOn ? initializeVideo() : stopVideo();
+		let mounted = true;
 
-		return () => {
-			//? Cleanup on Unmount
+		const cleanup = () => {
+			mounted = false;
 			clearInterval(detectionIntervalRef.current);
 			stopVideo();
 		};
-	}, [isVideoOn, isVideoInitialized]);
+
+		if (isVideoOn) {
+			initializeVideo().catch((err) => {
+				if (mounted) {
+					setError(err.message);
+					setIsVideoOn(false);
+				}
+			});
+		} else {
+			stopVideo();
+		}
+
+		return cleanup;
+	}, [isVideoOn]);
+
+	const startFaceDetection = useCallback(async () => {
+		if (!isVideoInitialized || !videoRef.current) return;
+
+		try {
+			const labeledFaceDescriptors = await getLabeledFaceDescriptions();
+
+			if (!labeledFaceDescriptors?.length) {
+				throw new Error("No face descriptors found");
+			}
+
+			const faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors);
+
+			detectionIntervalRef.current = setInterval(async () => {
+				if (!canvasRef.current || !videoRef.current) return;
+
+				try {
+					const detections = await faceapi
+						.detectAllFaces(videoRef.current)
+						.withFaceLandmarks()
+						.withFaceDescriptors();
+
+					const canvas = canvasRef.current;
+					const ctx = canvas.getContext("2d");
+					ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+					const resizedDetections = faceapi.resizeResults(
+						detections,
+						VIDEO_DIMENSIONS
+					);
+
+					faceapi.draw.drawDetections(canvas, resizedDetections);
+
+					resizedDetections.forEach((detection) => {
+						const match = faceMatcher.findBestMatch(detection.descriptor);
+						const drawBox = new faceapi.draw.DrawBox(detection.detection.box, {
+							label: match.toString(),
+						});
+						drawBox.draw(canvas);
+					});
+				} catch (error) {
+					console.error("Frame processing error:", error);
+				}
+			}, DETECTION_INTERVAL);
+		} catch (error) {
+			setError(`Face detection failed: ${error.message}`);
+			console.error("Face detection error:", error);
+		}
+	}, [isVideoInitialized]); // Remove getLabeledFaceDescriptions from dependencies
+
+	const loadModels = useCallback(async () => {
+		try {
+			setIsLoading(true);
+			await Promise.all([
+				faceapi.nets.ssdMobilenetv1.loadFromUri(MODELS_PATH),
+				faceapi.nets.faceRecognitionNet.loadFromUri(MODELS_PATH),
+				faceapi.nets.faceLandmark68Net.loadFromUri(MODELS_PATH),
+			]);
+			setAreModelsLoaded(true);
+			if (isVideoOn) {
+				await startFaceDetection();
+			}
+		} catch (error) {
+			setError(`Failed to load models: ${error.message}`);
+			console.error("Error loading models:", error);
+		} finally {
+			setIsLoading(false);
+		}
+	}, [isVideoOn, startFaceDetection]);
 
 	useEffect(() => {
-		const loadModels = async () => {
-			try {
-				await Promise.all([
-					faceapi.nets.ssdMobilenetv1.loadFromUri("/models"),
-					faceapi.nets.faceRecognitionNet.loadFromUri("/models"),
-					faceapi.nets.faceLandmark68Net.loadFromUri("/models"),
-				])
-					.then(() => {
-						setAreModelsLoaded(true);
-						if (isVideoOn) {
-							startVideo();
-						}
-					})
-					.catch((error) => {
-						console.error("Error loading models:", error);
-					});
-			} catch (error) {
-				console.error("Error loading models:", error);
-				throw error;
-			}
-		};
-
 		loadModels();
-	}, []);
+	}, [loadModels]);
 
 	const initializeVideo = async () => {
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+			const constraints = {
+				video: {
+					width: VIDEO_DIMENSIONS.width,
+					height: VIDEO_DIMENSIONS.height,
+				},
+			};
+			const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+			if (!videoRef.current) return;
+
 			videoRef.current.srcObject = stream;
 
-			videoRef.current.onloadedmetadata = () => {
-				setIsVideoInitialized(true);
-
-				if (areModelsLoaded) {
-					startVideo();
-				}
-			};
+			return new Promise((resolve) => {
+				videoRef.current.onloadedmetadata = () => {
+					setIsVideoInitialized(true);
+					resolve();
+				};
+			});
 		} catch (error) {
-			console.error("Error initializing video:", error);
-			setIsVideoOn(false);
+			setError(`Camera access denied: ${error.message}`);
+			throw error;
 		}
 	};
 
-	const startVideo = () => {
-		if (!isVideoInitialized) {
-			//? Wait for Video to Initialize before Starting
-			setTimeout(startVideo, 100);
-			return;
-		}
-
-		videoRef.current.play().then(() => {
-			startFaceDetection();
-		});
-	};
-
-	const stopVideo = () => {
-		if (videoRef.current) {
-			videoRef.current.pause();
+	const stopVideo = useCallback(() => {
+		if (videoRef.current?.srcObject) {
+			const tracks = videoRef.current.srcObject.getTracks();
+			tracks.forEach((track) => track.stop());
 			videoRef.current.srcObject = null;
 		}
-	};
-
-	const toggleVideo = () => setIsVideoOn((prevIsVideoOn) => !prevIsVideoOn);
+		setIsVideoInitialized(false);
+		clearInterval(detectionIntervalRef.current);
+	}, []);
 
 	const getLabeledFaceDescriptions = async () => {
-		const labeledFaceDescriptors = [];
+		try {
+			const labeledFaceDescriptors = [];
 
-		await Promise.all(
-			labels.map(async (label) => {
-				const descriptors = [];
+			await Promise.all(
+				labels.map(async (label) => {
+					const descriptors = [];
 
-				for (let i = 0; i < labels.length; i++) {
-					const image = await faceapi.fetchImage(`/images/${label}/${i}.jpg`);
+					for (let i = 0; i < labels.length; i++) {
+						try {
+							const image = await faceapi.fetchImage(
+								`/images/${label}/${i}.jpg`
+							);
+							const detection = await faceapi
+								.detectSingleFace(image)
+								.withFaceLandmarks()
+								.withFaceDescriptor();
 
-					const detections = await faceapi
-						.detectSingleFace(image)
-						.withFaceLandmarks()
-						.withFaceDescriptor();
+							if (detection) {
+								descriptors.push(detection.descriptor);
+							}
+						} catch (error) {
+							console.warn(
+								`Failed to process image ${i} for label ${label}:`,
+								error
+							);
+						}
+					}
 
-					descriptors.push(detections.descriptor);
-				}
+					if (descriptors.length > 0) {
+						labeledFaceDescriptors.push(
+							new faceapi.LabeledFaceDescriptors(label, descriptors)
+						);
+					}
+				})
+			);
 
-				if (descriptors.length > 0) {
-					const flattenedDescriptors = descriptors.flat();
-
-					labeledFaceDescriptors.push(
-						new faceapi.LabeledFaceDescriptors(label, flattenedDescriptors)
-					);
-				}
-			})
-		);
-
-		return labeledFaceDescriptors;
+			return labeledFaceDescriptors;
+		} catch (error) {
+			setError(`Failed to process face descriptions: ${error.message}`);
+			throw error;
+		}
 	};
 
-	const startFaceDetection = async () => {
-		if (!isVideoInitialized) {
-			return; //! Avoid processing frames if video is not initialized
-		}
-
-		const labeledFaceDescriptors = await getLabeledFaceDescriptions();
-		console.log(labeledFaceDescriptors);
-
-		if (!labeledFaceDescriptors || labeledFaceDescriptors.length === 0) {
-			console.error("Labeled face descriptors are missing or empty.");
-			return;
-		}
-
-		const faceMatcher = new faceapi.FaceMatcher(labeledFaceDescriptors);
-
-		detectionIntervalRef.current = setInterval(async () => {
-			try {
-				const canvas = canvasRef.current;
-				const displaySize = { width: 940, height: 650 };
-				faceapi.matchDimensions(canvas, displaySize);
-
-				const detections = await faceapi
-					.detectAllFaces(videoRef.current)
-					.withFaceLandmarks()
-					.withFaceDescriptors();
-
-				const resizedDetections = faceapi.resizeResults(
-					detections,
-					displaySize
-				);
-
-				faceapi.draw.drawDetections(canvas, resizedDetections);
-
-				const results = resizedDetections.map((d) => {
-					return faceMatcher.findBestMatch(d.descriptor);
-				});
-
-				results.forEach((result, i) => {
-					const box = resizedDetections[i].detection.box;
-					const drawBox = new faceapi.draw.DrawBox(box, {
-						label: result,
-					});
-					drawBox.draw(canvas);
-				});
-			} catch (error) {
-				console.error("Error detecting faces:", error);
+	const toggleVideo = useCallback(async () => {
+		try {
+			if (isVideoOn) {
+				stopVideo();
+				setIsVideoOn(false);
+			} else {
+				setIsVideoOn(true);
+				await initializeVideo();
+				if (areModelsLoaded) {
+					await startFaceDetection();
+				}
 			}
-		}, 1000);
-	};
+		} catch (error) {
+			setError(`Failed to toggle video: ${error.message}`);
+			setIsVideoOn(false);
+		}
+	}, [
+		isVideoOn,
+		areModelsLoaded,
+		stopVideo,
+		initializeVideo,
+		startFaceDetection,
+	]);
+
+	if (error) {
+		return (
+			<div className="flex flex-col items-center justify-center h-screen">
+				<div className="text-red-600 mb-4">Error: {error}</div>
+				<button
+					onClick={() => {
+						setError(null);
+						loadModels();
+					}}
+					className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+				>
+					Retry
+				</button>
+			</div>
+		);
+	}
 
 	return (
 		<div className="flex flex-col items-center w-screen h-screen justify-center">
@@ -252,3 +320,13 @@ export default function App() {
 		</div>
 	);
 }
+
+App.propTypes = {
+	modelPath: PropTypes.string,
+	detectionInterval: PropTypes.number,
+};
+
+App.defaultProps = {
+	modelPath: MODELS_PATH,
+	detectionInterval: DETECTION_INTERVAL,
+};
